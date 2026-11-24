@@ -1,0 +1,405 @@
+﻿<!doctype html>
+<html lang="ko">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Mario World with Super Mushroom, Block & Kirby</title>
+    <script src="https://aframe.io/releases/1.6.0/aframe.min.js"></script>
+    <!-- 로컬 file:// 실행 시 CORS 차단 없이 에셋을 즉시 불러오기 위한 데이터 스크립트 -->
+    <script src="mario_mushroom_data.js"></script>
+    <script src="mario_block_data.js"></script>
+    <script src="model_data.js"></script>
+    <script src="kirby_data.js"></script>
+    <script src="question_block_data.js"></script>
+    <script src="bg_data.js"></script>
+    <script>
+      // 마리오 게임 배경 스카이 컴포넌트
+      AFRAME.registerComponent("mario-sky", {
+        init: function () {
+          var el = this.el;
+          var src = window.BG_DATA_URL || "59b7def68edf9077af69bfe0b05053f9.jpg";
+          var loader = new THREE.TextureLoader();
+          loader.load(src, function (texture) {
+            texture.colorSpace = THREE.SRGBColorSpace;
+            texture.wrapS = THREE.RepeatWrapping;
+            texture.wrapT = THREE.ClampToEdgeWrapping;
+            texture.repeat.set(4, 1);
+            var mesh = el.getObject3D("mesh");
+            if (mesh && mesh.material) {
+              mesh.material.map = texture;
+              mesh.material.needsUpdate = true;
+            }
+          });
+        },
+      });
+
+      // 마리오 게임 바닥 블록 타일 절차적 생성 컴포넌트
+      AFRAME.registerComponent("mario-ground", {
+        init: function () {
+          var canvas = document.createElement("canvas");
+          canvas.width = 256;
+          canvas.height = 256;
+          var ctx = canvas.getContext("2d");
+
+          var tileSize = 128;
+          for (var ty = 0; ty < 2; ty++) {
+            for (var tx = 0; tx < 2; tx++) {
+              var ox = tx * tileSize;
+              var oy = ty * tileSize;
+
+              // 마리오 블록 주황/갈색 베이스
+              ctx.fillStyle = "#d86b27";
+              ctx.fillRect(ox, oy, tileSize, tileSize);
+
+              // 상단/좌측 밝은 하이라이트
+              ctx.fillStyle = "#fca662";
+              ctx.fillRect(ox + 4, oy + 4, tileSize - 8, 8);
+              ctx.fillRect(ox + 4, oy + 4, 8, tileSize - 8);
+
+              // 하단/우측 어두운 그림자
+              ctx.fillStyle = "#87380c";
+              ctx.fillRect(ox + 4, oy + tileSize - 12, tileSize - 8, 8);
+              ctx.fillRect(ox + tileSize - 12, oy + 4, 8, tileSize - 8);
+
+              // 외곽 진한 테두리선
+              ctx.strokeStyle = "#1b0a03";
+              ctx.lineWidth = 4;
+              ctx.strokeRect(ox + 2, oy + 2, tileSize - 4, tileSize - 4);
+
+              // 마리오 블록 코너 4개 리벳(나사못) 디테일
+              var dots = [
+                [ox + 22, oy + 22],
+                [ox + tileSize - 22, oy + 22],
+                [ox + 22, oy + tileSize - 22],
+                [ox + tileSize - 22, oy + tileSize - 22],
+              ];
+              for (var d = 0; d < dots.length; d++) {
+                ctx.fillStyle = "#1b0a03";
+                ctx.beginPath();
+                ctx.arc(dots[d][0], dots[d][1], 5, 0, Math.PI * 2);
+                ctx.fill();
+                ctx.fillStyle = "#fca662";
+                ctx.beginPath();
+                ctx.arc(dots[d][0] - 1, dots[d][1] - 1, 2, 0, Math.PI * 2);
+                ctx.fill();
+              }
+            }
+          }
+
+          var texture = new THREE.CanvasTexture(canvas);
+          texture.wrapS = THREE.RepeatWrapping;
+          texture.wrapT = THREE.RepeatWrapping;
+          texture.repeat.set(40, 40);
+          texture.colorSpace = THREE.SRGBColorSpace;
+
+          var el = this.el;
+          var apply = function () {
+            var mesh = el.getObject3D("mesh");
+            if (mesh && mesh.material) {
+              mesh.material.map = texture;
+              mesh.material.roughness = 0.85;
+              mesh.material.metalness = 0.1;
+              mesh.material.needsUpdate = true;
+            }
+          };
+          el.addEventListener("loaded", apply);
+          apply();
+        },
+      });
+
+      // 항상 사용자의 카메라를 정면으로 바라보게 하는 빌보드 컴포넌트
+      AFRAME.registerComponent("always-face-camera", {
+        tick: function () {
+          var camera = this.el.sceneEl.camera;
+          if (!camera) return;
+          var camWorldPos = new THREE.Vector3();
+          camera.getWorldPosition(camWorldPos);
+          this.el.object3D.lookAt(camWorldPos);
+        },
+      });
+
+      // Mario Super Mushroom 3D GLB 로더 및 전신 온전 노출 보정 컴포넌트
+      AFRAME.registerComponent("mario-super-mushroom", {
+        init: function () {
+          var el = this.el;
+          var modelSrc = window.MARIO_MUSHROOM_URL || "mario_super_mushroom.glb";
+          el.setAttribute("gltf-model", modelSrc);
+
+          el.addEventListener("model-loaded", function () {
+            console.log("✅ Mario Super Mushroom 3D 모델 로드 완료!");
+            var originalMesh = el.getObject3D("mesh");
+            if (originalMesh) {
+              originalMesh.updateMatrixWorld(true);
+
+              var box = new THREE.Box3().setFromObject(originalMesh);
+              var center = new THREE.Vector3();
+              box.getCenter(center);
+              var size = new THREE.Vector3();
+              box.getSize(size);
+
+              var maxDim = Math.max(size.x, size.y, size.z);
+              var s = maxDim > 0 ? 1.35 / maxDim : 1;
+
+              var wrapper = new THREE.Group();
+              originalMesh.position.set(-center.x, -center.y, -center.z);
+              wrapper.add(originalMesh);
+              wrapper.scale.set(s, s, s);
+
+              wrapper.traverse(function (node) {
+                if (node.isMesh) {
+                  node.castShadow = true;
+                  node.receiveShadow = true;
+                  if (node.material) {
+                    node.material.side = THREE.DoubleSide;
+                    if (node.material.map) {
+                      node.material.map.colorSpace = THREE.SRGBColorSpace;
+                    }
+                    node.material.roughness = 0.5;
+                    node.material.metalness = 0.05;
+                    node.material.needsUpdate = true;
+                  }
+                }
+              });
+
+              el.setObject3D("mesh", wrapper);
+            }
+          });
+
+          el.addEventListener("model-error", function (e) {
+            console.error("❌ Mario Mushroom 모델 로드 실패:", e);
+          });
+        },
+      });
+
+      // Mario Block 3D GLB 로더: Wrapper Group 패턴으로 원본 오프셋/피벗 완전 해결
+      AFRAME.registerComponent("mario-block", {
+        init: function () {
+          var el = this.el;
+          var modelSrc = window.MARIO_BLOCK_URL || "mario_block.glb";
+          el.setAttribute("gltf-model", modelSrc);
+
+          el.addEventListener("model-loaded", function () {
+            console.log("✅ Mario Block 3D 모델 로드 완료!");
+            var originalMesh = el.getObject3D("mesh");
+            if (originalMesh) {
+              // 1. 원본 씬 그래프 변환 업데이트
+              originalMesh.updateMatrixWorld(true);
+
+              // 2. 정밀 바운딩 박스 측정
+              var box = new THREE.Box3().setFromObject(originalMesh);
+              var center = new THREE.Vector3();
+              box.getCenter(center);
+              var size = new THREE.Vector3();
+              box.getSize(size);
+
+              // 3. 적정 크기(한 변 약 1.25m) 스케일 계산
+              var maxDim = Math.max(size.x, size.y, size.z);
+              var s = maxDim > 0 ? 1.25 / maxDim : 1;
+
+              // 4. Wrapper 그룹을 생성하여 피벗을 (0,0,0)에 완벽 고정
+              var wrapper = new THREE.Group();
+              originalMesh.position.set(-center.x, -center.y, -center.z);
+              wrapper.add(originalMesh);
+              wrapper.scale.set(s, s, s);
+
+              // 5. 양면 렌더링 및 그림자 설정
+              wrapper.traverse(function (node) {
+                if (node.isMesh) {
+                  node.castShadow = true;
+                  node.receiveShadow = true;
+                  if (node.material) {
+                    node.material.side = THREE.DoubleSide;
+                    if (node.material.map) {
+                      node.material.map.colorSpace = THREE.SRGBColorSpace;
+                    }
+                    node.material.roughness = 0.45;
+                    node.material.metalness = 0.05;
+                    node.material.needsUpdate = true;
+                  }
+                }
+              });
+
+              // 6. el의 mesh를 완벽히 정렬된 wrapper로 교체
+              el.setObject3D("mesh", wrapper);
+            }
+          });
+
+          el.addEventListener("model-error", function (e) {
+            console.error("❌ Mario Block 모델 로드 실패:", e);
+          });
+        },
+      });
+
+      // 투명 배경 커비 스프라이트 컴포넌트
+      AFRAME.registerComponent("kirby-sprite", {
+        init: function () {
+          var el = this.el;
+          var imgSrc = window.KIRBY_DATA_URL || "kirby.png";
+          var loader = new THREE.TextureLoader();
+          loader.load(imgSrc, function (texture) {
+            texture.colorSpace = THREE.SRGBColorSpace;
+            var mesh = el.getObject3D("mesh");
+            if (mesh && mesh.material) {
+              mesh.material.map = texture;
+              mesh.material.transparent = true;
+              mesh.material.alphaTest = 0.1;
+              mesh.material.side = THREE.DoubleSide;
+              mesh.material.roughness = 0.5;
+              mesh.material.metalness = 0.05;
+              mesh.material.needsUpdate = true;
+            }
+          });
+
+          el.addEventListener("loaded", function () {
+            var mesh = el.getObject3D("mesh");
+            if (mesh) {
+              mesh.castShadow = true;
+              mesh.receiveShadow = true;
+            }
+          });
+        },
+      });
+
+      // 투명 배경 물음표 블럭 스프라이트 컴포넌트
+      AFRAME.registerComponent("question-block-sprite", {
+        init: function () {
+          var el = this.el;
+          var imgSrc = window.QUESTION_BLOCK_URL || "question_block.png";
+          var loader = new THREE.TextureLoader();
+          loader.load(imgSrc, function (texture) {
+            texture.colorSpace = THREE.SRGBColorSpace;
+            var mesh = el.getObject3D("mesh");
+            if (mesh && mesh.material) {
+              mesh.material.map = texture;
+              mesh.material.transparent = true;
+              mesh.material.alphaTest = 0.1;
+              mesh.material.side = THREE.DoubleSide;
+              mesh.material.roughness = 0.5;
+              mesh.material.metalness = 0.05;
+              mesh.material.needsUpdate = true;
+            }
+          });
+
+          el.addEventListener("loaded", function () {
+            var mesh = el.getObject3D("mesh");
+            if (mesh) {
+              mesh.castShadow = true;
+              mesh.receiveShadow = true;
+            }
+          });
+        },
+      });
+    </script>
+    <style>
+      html,
+      body {
+        margin: 0;
+        width: 100%;
+        height: 100%;
+        overflow: hidden;
+        background: #5e91fe;
+      }
+    </style>
+  </head>
+  <body>
+    <a-scene shadow="type: pcfsoft">
+      <!-- 59b7def68edf9077af69bfe0b05053f9.jpg 마리오 하늘 배경 -->
+      <a-sky mario-sky radius="70"></a-sky>
+
+      <!-- 태양광 (그림자를 만드는 주 광원) -->
+      <a-entity
+        light="type: directional;
+               castShadow: true;
+               shadowCameraFar: 45;
+               shadowCameraTop: 12;
+               shadowCameraBottom: -12;
+               shadowCameraLeft: -12;
+               shadowCameraRight: 12;
+               shadowMapWidth: 2048;
+               shadowMapHeight: 2048;
+               shadowBias: -0.0003;
+               color: #fff9ea;
+               intensity: 1.2"
+        position="5 13 6"
+      ></a-entity>
+
+      <!-- 화사한 야외 환경광 -->
+      <a-entity light="type: ambient; color: #e0f2fe; intensity: 0.65"></a-entity>
+      <a-entity
+        light="type: hemisphere; groundColor: #8a3a0e; color: #bae6fd; intensity: 0.5"
+      ></a-entity>
+
+      <!-- 마리오 블록 바닥 (그림자 수신) -->
+      <a-plane
+        mario-ground
+        position="0 0 0"
+        rotation="-90 0 0"
+        width="100"
+        height="100"
+        shadow="receive: true"
+        material="color: #d86b27; roughness: 0.85; metalness: 0.1;"
+      ></a-plane>
+
+      <a-entity id="camera-rig" position="0 1.6 0">
+        <a-camera position="0 0 0"></a-camera>
+
+        <!-- 1번째 궤도: 3D Mario Super Mushroom (반경 2.8m, Y 0.35m, 공전 4.5초, 자전 2.2초) -->
+        <a-entity
+          animation="property: rotation; to: 0 360 0; loop: true; dur: 4500; easing: linear;"
+        >
+          <a-entity
+            mario-super-mushroom
+            shadow="cast: true; receive: true"
+            position="2.8 0.35 0"
+            animation="property: rotation; to: 0 360 0; loop: true; dur: 2200; easing: linear;"
+          ></a-entity>
+        </a-entity>
+
+        <!-- 2번째 궤도: 3D Mario Block (공중에 온전히 노출: 반경 3.45m, Y 0.9m, 공전 5.7초, 자전 3.2초) -->
+        <a-entity
+          rotation="-6 0 12"
+          animation="property: rotation; to: -6 360 12; loop: true; dur: 5700; easing: linear;"
+        >
+          <a-entity
+            mario-block
+            shadow="cast: true; receive: true"
+            position="3.45 0.9 0"
+            animation="property: rotation; to: 0 360 0; loop: true; dur: 3200; easing: linear;"
+          ></a-entity>
+        </a-entity>
+
+        <!-- 3번째 궤도: 커비 (반경 4.2m, Y -0.1m, 궤도경사 14도, 공전 7.0초, 카메라 응시) -->
+        <a-entity
+          rotation="14 0 0"
+          animation="property: rotation; to: 14 360 0; loop: true; dur: 7000; easing: linear;"
+        >
+          <a-plane
+            kirby-sprite
+            always-face-camera
+            shadow="cast: true; receive: true"
+            position="4.2 -0.1 0"
+            width="1.15"
+            height="1.1"
+            material="transparent: true; alphaTest: 0.1; side: double; roughness: 0.5;"
+          ></a-plane>
+        </a-entity>
+
+        <!-- 4번째 궤도: 물음표 블럭 (반경 5.6m, Y 0.35m, 궤도경사 -10도, 공전 10.2초, 카메라 응시) -->
+        <a-entity
+          rotation="-10 0 0"
+          animation="property: rotation; to: -10 360 0; loop: true; dur: 10200; easing: linear;"
+        >
+          <a-plane
+            question-block-sprite
+            always-face-camera
+            shadow="cast: true; receive: true"
+            position="5.6 0.35 0"
+            width="1.2"
+            height="1.11"
+            material="transparent: true; alphaTest: 0.1; side: double; roughness: 0.5;"
+          ></a-plane>
+        </a-entity>
+      </a-entity>
+    </a-scene>
+  </body>
+</html>
